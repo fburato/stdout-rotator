@@ -2,3 +2,7 @@
 name = "rotate-tests"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+clap = { version = "4.4.6", features = ["derive"] }
+log4rs = "1.2.0"

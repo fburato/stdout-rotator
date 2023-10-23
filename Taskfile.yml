@@ -1,0 +1,8 @@
+version: '3'
+
+tasks:
+  release:
+    desc: Build rotate-tests for all supported architectures
+    cmds:
+      - cargo build --release
+      - cargo build --release --target x86_64-pc-windows-gnu
