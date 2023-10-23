@@ -1,13 +1,17 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::error::Error;
 use std::sync::mpsc;
 use std::thread;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut buffer: Box<[u8]> = vec![0; 4096].into_boxed_slice(); 
+    let mut buffer: Box<[u8]> = vec![0; 4096].into_boxed_slice();
     let mut stdin = io::stdin();
-    let mut file: File = File::options().read(true).write(true).create(true).open("target/output.txt")?;
+    let mut file: File = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open("target/output.txt")?;
     file.set_len(0)?;
     let (txstdout, rxstdout) = mpsc::channel::<Vec<u8>>();
     let (txfile, rxfile) = mpsc::channel::<Vec<u8>>();
@@ -16,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::spawn(move || {
         let mut stdout = io::stdout();
         let mut stop = false;
-        while ! stop {
+        while !stop {
             let read_result = rxstdout.recv();
             if read_result.is_err() {
                 stop = true;
@@ -29,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     thread::spawn(move || {
         let mut stop: bool = false;
-        while ! stop {
+        while !stop {
             let read_result = rxfile.recv();
             if read_result.is_err() {
                 stop = true;
@@ -41,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let mut stop: bool = false;
-    while ! stop {
+    while !stop {
         let read_data = stdin.read(&mut buffer)?;
         if read_data == 0 {
             stop = true;
