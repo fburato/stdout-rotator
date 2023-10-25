@@ -1,11 +1,19 @@
+use log::{self, LevelFilter};
+use log4rs::append::console::ConsoleAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::Config;
 use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::process::exit;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use clap::Parser;
+
+const LOGGER: &str = "rotator";
 
 #[derive(Parser, Debug)]
 #[command(name = "stdout-rotator")]
@@ -19,6 +27,8 @@ struct Args {
     gunzip: bool,
     #[arg(short, long, default_value_t = 5)]
     max_history: u32,
+    #[arg(long, default_value = None)]
+    log_config: Option<String>,
 }
 
 #[derive(Debug)]
@@ -109,6 +119,7 @@ fn start_file_writing(
             file.write(&read).unwrap();
             txcomplete.send(true).unwrap();
         }
+        file.flush().unwrap();
     });
     Ok(())
 }
@@ -154,14 +165,70 @@ fn start_read_cycle(
     Ok(())
 }
 
-fn main() -> Result<(), RotatorError> {
-    let args = Args::parse();
+fn config_logger(maybe_config: &Option<String>) -> Result<(), RotatorError> {
+    match maybe_config {
+        None => {
+            let stderr_logger = ConsoleAppender::builder()
+                .target(log4rs::append::console::Target::Stderr)
+                .encoder(Box::new(PatternEncoder::new(
+                    "{d(%Y-%m-%dT%H:%M:%S%Z)(utc)} {l:>8} {t:>10.15} - {m}{n}",
+                )))
+                .build();
+            let config = Config::builder()
+                .appender(Appender::builder().build("console", Box::new(stderr_logger)))
+                .build(Root::builder().appender("console").build(LevelFilter::Info))
+                .map_err(|op| {
+                    format!(
+                        "Error during initialisation of default console logger: {}",
+                        op.to_string()
+                    )
+                })?;
+            log4rs::init_config(config).map_err(|op| {
+                format!(
+                    "Error during initialising of logger configuration: {}",
+                    op.to_string()
+                )
+            })?;
+            Ok(())
+        }
+        Some(log_config) => {
+            log4rs::init_file(log_config, Default::default()).map_err(|op| {
+                format!(
+                    "Error during load of logging configuration from '{}': {}",
+                    log_config,
+                    op.to_string()
+                )
+            })?;
+            Ok(())
+        }
+    }
+}
+
+fn app(args: Args) -> Result<(), RotatorError> {
+    config_logger(&args.log_config)?;
+    log::info!(target: LOGGER, "Parsed command line arguments: {:?}", args);
+    log::debug!(target: LOGGER, "Test debug");
     let (txstdout, rxstdout) = mpsc::channel::<Vec<u8>>();
     let (txfile, rxfile) = mpsc::channel::<Vec<u8>>();
     let (txcomplete1, rxcomplete) = mpsc::channel::<bool>();
     let txcomplete2 = txcomplete1.clone();
+    log::info!(target: LOGGER, "Starting stdout writing");
     start_stdout_writing(rxstdout, txcomplete1);
+    log::info!(target: LOGGER, "Starting file writing");
     start_file_writing(&args.output_file, rxfile, txcomplete2)?;
+    log::info!(target: LOGGER, "Starting stdout reading");
     start_read_cycle(txstdout, txfile, rxcomplete)?;
     Ok(())
+}
+
+fn main() {
+    let args = Args::parse();
+    match app(args) {
+        Ok(()) => {}
+        Err(err) => {
+            log::error!(target: LOGGER, "{}", err.msg);
+            eprintln!("{}", err.msg);
+            exit(1);
+        }
+    }
 }
