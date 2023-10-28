@@ -1,3 +1,5 @@
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use log::{self, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Root};
@@ -9,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::exit;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use clap::Parser;
 
@@ -56,7 +58,7 @@ impl From<String> for RotatorError {
     }
 }
 
-fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) {
+fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut stdout = io::stdout();
         let mut stop = false;
@@ -70,14 +72,14 @@ fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) {
             stdout.write(&read).unwrap();
             txcomplete.send(true).unwrap();
         }
-    });
+    })
 }
 
 fn start_file_writing(
     output: &str,
     rxfile: Receiver<Vec<u8>>,
     txcomplete: Sender<bool>,
-) -> Result<(), RotatorError> {
+) -> Result<JoinHandle<()>, RotatorError> {
     if let Some(parent) = Path::new(output).parent() {
         fs::create_dir_all(parent).map_err(|op| {
             format!(
@@ -100,6 +102,19 @@ fn start_file_writing(
                 op.to_string()
             )
         })?;
+    let gunzip: File = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(output.to_string() + ".gz")
+        .map_err(|op| {
+            format!(
+                "Error during opening of target file '{}', {}",
+                output,
+                op.to_string()
+            )
+        })?;
+    let mut compressor = GzEncoder::new(gunzip, Compression::default());
     file.set_len(0).map_err(|op| {
         format!(
             "Error during truncate of file '{}', {}",
@@ -107,7 +122,7 @@ fn start_file_writing(
             op.to_string()
         )
     })?;
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let mut stop: bool = false;
         while !stop {
             let read_result = rxfile.recv();
@@ -116,12 +131,15 @@ fn start_file_writing(
                 continue;
             }
             let read = read_result.unwrap();
-            file.write(&read).unwrap();
+            file.write_all(&read).unwrap();
+            compressor.write_all(&read).unwrap();
             txcomplete.send(true).unwrap();
         }
+        let mut finish = compressor.finish().unwrap();
+        finish.flush().unwrap();
         file.flush().unwrap();
     });
-    Ok(())
+    Ok(handle)
 }
 
 fn start_read_cycle(
@@ -213,11 +231,17 @@ fn app(args: Args) -> Result<(), RotatorError> {
     let (txcomplete1, rxcomplete) = mpsc::channel::<bool>();
     let txcomplete2 = txcomplete1.clone();
     log::info!(target: LOGGER, "Starting stdout writing");
-    start_stdout_writing(rxstdout, txcomplete1);
+    let stdout_handle = start_stdout_writing(rxstdout, txcomplete1);
     log::info!(target: LOGGER, "Starting file writing");
-    start_file_writing(&args.output_file, rxfile, txcomplete2)?;
+    let file_handle = start_file_writing(&args.output_file, rxfile, txcomplete2)?;
     log::info!(target: LOGGER, "Starting stdout reading");
     start_read_cycle(txstdout, txfile, rxcomplete)?;
+    stdout_handle
+        .join()
+        .map_err(|_| format!("Error on join of stdout"))?;
+    file_handle
+        .join()
+        .map_err(|_| format!("Error on join of file"))?;
     Ok(())
 }
 
