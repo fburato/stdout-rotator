@@ -26,18 +26,34 @@ const LOGGER: &str = "rotator";
 stdout-rotator replicates its standard input to standard output and to a file and standard output, applying maximum size based log-rotation to it. It can be used to pipe the standard output of a process to a file which is automatically rotated without requiring the program to support log rotation. 
 "#)]
 struct Args {
-    #[arg(long, default_value = "output.log", help="Path to the file where the standard input is re-directed and rotated")]
+    #[arg(
+        long,
+        default_value = "output.log",
+        help = "Path to the file where the standard input is re-directed and rotated"
+    )]
     output_file: String,
-    #[arg(short, long, default_value_t = false, help = "Activates gunzip compression of rotated files")]
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Activates gunzip compression of rotated files"
+    )]
     gunzip: bool,
     #[arg(long, default_value = None, help = "Directory where rotated files are saved. If not provided, the same directory of the output file will be used")]
     rotation_directory: Option<String>,
-    #[arg(short, long, default_value_t = 5, help = "Maximum number of rotated files retained")]
+    #[arg(
+        short,
+        long,
+        default_value_t = 5,
+        help = "Maximum number of rotated files retained"
+    )]
     max_history: u32,
     #[arg(long, default_value = None, help = "Configuration to log4rs logging configuration. If not provided the default logging configuration is used, using stderr")]
     log_config: Option<String>,
     #[arg(long, default_value = "50MB", value_parser = file_size, help = "Size of the output file which triggers rotation")]
     max_size: u64,
+    #[arg(long, default_value_t = 4096, help = "Read buffer size")]
+    buffer_size: u32,
 }
 
 fn file_size(size: &str) -> Result<u64, String> {
@@ -284,11 +300,12 @@ fn perform_rotation(
 }
 
 fn start_read_cycle(
+    buffer_size: u32,
     txstdout: Sender<Vec<u8>>,
     txfile: Sender<Vec<u8>>,
     rxcomplete: Receiver<bool>,
 ) -> Result<(), RotatorError> {
-    let mut buffer: Box<[u8]> = vec![0; 4096].into_boxed_slice();
+    let mut buffer: Box<[u8]> = vec![0; buffer_size.try_into().unwrap()].into_boxed_slice();
     let mut stdin = io::stdin();
     let mut stop: bool = false;
     while !stop {
@@ -376,6 +393,7 @@ fn next_file(
         .to_str()
         .unwrap()
         .to_string();
+    let base_parent = if base_parent == "" { ".".to_string() } else { base_parent };
     let parent = rotation_directory.unwrap_or(&base_parent);
     log::debug!(target: LOGGER, "parent={}", &parent);
     let paths = fs::read_dir(&parent).map_err(|op| {
@@ -478,7 +496,7 @@ fn app(args: Args) -> Result<(), RotatorError> {
         txcomplete2,
     )?;
     log::info!(target: LOGGER, "Starting stdout reading");
-    start_read_cycle(txstdout, txfile, rxcomplete)?;
+    start_read_cycle(args.buffer_size, txstdout, txfile, rxcomplete)?;
     stdout_handle
         .join()
         .map_err(|_| format!("Error on join of stdout"))?;
