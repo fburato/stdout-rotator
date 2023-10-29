@@ -2,13 +2,15 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use log::{self, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
+use log4rs::append::file;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::Config;
+use regex::Regex;
 use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -58,6 +60,20 @@ impl From<String> for RotatorError {
     }
 }
 
+struct RotationResult {
+    existing_rotated: Vec<PathBuf>,
+    next_rotation: PathBuf,
+}
+
+impl RotationResult {
+    fn new(existing_rotated: Vec<PathBuf>, next_rotation: PathBuf) -> RotationResult {
+        RotationResult {
+            existing_rotated: existing_rotated,
+            next_rotation: next_rotation,
+        }
+    }
+}
+
 fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut stdout = io::stdout();
@@ -77,6 +93,7 @@ fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) -
 
 fn start_file_writing(
     output: &str,
+    rotation_directory: &str,
     rxfile: Receiver<Vec<u8>>,
     txcomplete: Sender<bool>,
 ) -> Result<JoinHandle<()>, RotatorError> {
@@ -102,11 +119,12 @@ fn start_file_writing(
                 op.to_string()
             )
         })?;
+    let result = next_file(output, rotation_directory)?;
     let gunzip: File = File::options()
         .read(true)
         .write(true)
         .create(true)
-        .open(output.to_string() + ".gz")
+        .open(result.next_rotation)
         .map_err(|op| {
             format!(
                 "Error during opening of target file '{}', {}",
@@ -194,7 +212,11 @@ fn config_logger(maybe_config: &Option<String>) -> Result<(), RotatorError> {
                 .build();
             let config = Config::builder()
                 .appender(Appender::builder().build("console", Box::new(stderr_logger)))
-                .build(Root::builder().appender("console").build(LevelFilter::Info))
+                .build(
+                    Root::builder()
+                        .appender("console")
+                        .build(LevelFilter::Debug),
+                )
                 .map_err(|op| {
                     format!(
                         "Error during initialisation of default console logger: {}",
@@ -222,6 +244,59 @@ fn config_logger(maybe_config: &Option<String>) -> Result<(), RotatorError> {
     }
 }
 
+fn next_file(output_file: &str, rotation_directory: &str) -> Result<RotationResult, RotatorError> {
+    let base_path = PathBuf::from(output_file);
+    let parent = if rotation_directory.to_string() == "" {
+        ".".to_string()
+    } else {
+        rotation_directory.to_string()
+    };
+    log::debug!(target: LOGGER, "parent={}", &parent);
+    let paths = fs::read_dir(&parent).map_err(|op| {
+        format!(
+            "Error while listing files of '{}': {}",
+            &parent,
+            op.to_string()
+        )
+    })?;
+    let mut maximum = 0;
+    let base_name = base_path.file_name().unwrap().to_str().unwrap();
+    let pattern = format!("^{}\\.(?<digit>[0-9]+)\\.gz$", base_name);
+    let path_regex = Regex::new(&pattern).unwrap();
+    let mut existing_rotated: Vec<(i32, PathBuf)> = vec![];
+    log::debug!(target: LOGGER, "pattern={}", &path_regex);
+    for path_result in paths {
+        let path = path_result.map_err(|op| {
+            format!(
+                "Error while listing files of '{}': {}",
+                parent,
+                op.to_string()
+            )
+        })?;
+        let file_name = path.file_name().to_str().unwrap().to_string();
+        log::debug!(target: LOGGER, "file_name={}", file_name);
+        if let Some(capture) = path_regex.captures(&file_name) {
+            let digit = &capture["digit"];
+            let parsed = digit.parse::<i32>().unwrap();
+            let mut existing_buffer = PathBuf::from(rotation_directory);
+            existing_buffer.push(file_name);
+            existing_rotated.push((parsed, existing_buffer));
+            if maximum <= parsed {
+                maximum = parsed;
+            }
+        }
+    }
+    existing_rotated.sort_by(|(d1, _), (d2, _)| d1.cmp(d2));
+    let mut output_path = PathBuf::from(rotation_directory);
+    output_path.push(format!("{}.{}.gz", base_name, (maximum + 1)));
+    let existing_rotated: Vec<PathBuf> = existing_rotated
+        .iter()
+        .map(move |(_, path)| path.to_owned())
+        .collect();
+    log::debug!(target: LOGGER, "next_file={}, existing={:?}", &output_path.display(), &existing_rotated);
+    Ok(RotationResult::new(existing_rotated, output_path))
+}
+
 fn app(args: Args) -> Result<(), RotatorError> {
     config_logger(&args.log_config)?;
     log::info!(target: LOGGER, "Parsed command line arguments: {:?}", args);
@@ -233,7 +308,12 @@ fn app(args: Args) -> Result<(), RotatorError> {
     log::info!(target: LOGGER, "Starting stdout writing");
     let stdout_handle = start_stdout_writing(rxstdout, txcomplete1);
     log::info!(target: LOGGER, "Starting file writing");
-    let file_handle = start_file_writing(&args.output_file, rxfile, txcomplete2)?;
+    let file_handle = start_file_writing(
+        &args.output_file,
+        &args.rotation_directory,
+        rxfile,
+        txcomplete2,
+    )?;
     log::info!(target: LOGGER, "Starting stdout reading");
     start_read_cycle(txstdout, txfile, rxcomplete)?;
     stdout_handle
