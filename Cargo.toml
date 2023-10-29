@@ -8,4 +8,5 @@ clap = { version = "4.4.6", features = ["derive"] }
 flate2 = "1.0.28"
 log = { version = "0.4.20", features = ["std"] }
 log4rs = { version = "1.2.0", features = ["all_components"] }
+parse-size = "1.0.0"
 regex = "1.10.2"
