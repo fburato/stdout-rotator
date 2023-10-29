@@ -1,6 +1,6 @@
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use log::{self, debug, error, info, LevelFilter};
+use log::{self, debug, error, info, warn, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
@@ -89,7 +89,7 @@ fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) -
             let read_result = rxstdout.recv();
             if let Err(result) = read_result {
                 stop = true;
-                error!(target: logger, "Erro while reading result: {}", result.to_string());
+                warn!(target: logger, "Error while reading result: {}", result.to_string());
                 continue;
             }
             let read = read_result.unwrap();
@@ -100,7 +100,7 @@ fn start_stdout_writing(rxstdout: Receiver<Vec<u8>>, txcomplete: Sender<bool>) -
             }
             if let Err(result) = txcomplete.send(true) {
                 stop = true;
-                error!(target: logger, "Error while sending acknowledgment: {}", result.to_string());
+                warn!(target: logger, "Error while sending acknowledgment: {}", result.to_string());
             }
         }
     })
@@ -153,7 +153,7 @@ fn start_file_writing(
             let read_result = rxfile.recv();
             if let Err(result) = read_result {
                 stop = true;
-                error!(target: logger, "Error while reading result: {}", result.to_string());
+                warn!(target: logger, "Error while reading result: {}", result.to_string());
                 continue;
             }
             let read = read_result.unwrap();
@@ -178,7 +178,7 @@ fn start_file_writing(
             }
             if let Err(result) = txcomplete.send(true) {
                 stop = true;
-                error!(target: logger, "Error while sending confirmation: {}", result.to_string());
+                warn!(target: logger, "Error while sending confirmation: {}", result.to_string());
             }
         }
         if let Err(result) = file.flush() {
@@ -332,11 +332,7 @@ fn config_logger(maybe_config: &Option<String>) -> Result<(), RotatorError> {
                 .build();
             let config = Config::builder()
                 .appender(Appender::builder().build("console", Box::new(stderr_logger)))
-                .build(
-                    Root::builder()
-                        .appender("console")
-                        .build(LevelFilter::Debug),
-                )
+                .build(Root::builder().appender("console").build(LevelFilter::Info))
                 .map_err(|op| {
                     format!(
                         "Error during initialisation of default console logger: {}",
