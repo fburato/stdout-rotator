@@ -21,19 +21,22 @@ const LOGGER: &str = "rotator";
 
 #[derive(Parser, Debug)]
 #[command(name = "stdout-rotator")]
-#[command(about = "Allows to apply log-rotate to console output programs")]
+#[command(about = "Log-rotate console output programs to specific location")]
+#[command(long_about = r#"
+stdout-rotator replicates its standard input to standard output and to a file and standard output, applying maximum size based log-rotation to it. It can be used to pipe the standard output of a process to a file which is automatically rotated without requiring the program to support log rotation. 
+"#)]
 struct Args {
-    #[arg(long, default_value = "output.log")]
+    #[arg(long, default_value = "output.log", help="Path to the file where the standard input is re-directed and rotated")]
     output_file: String,
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long, default_value_t = false, help = "Activates gunzip compression of rotated files")]
     gunzip: bool,
-    #[arg(long, default_value = None)]
+    #[arg(long, default_value = None, help = "Directory where rotated files are saved. If not provided, the same directory of the output file will be used")]
     rotation_directory: Option<String>,
-    #[arg(short, long, default_value_t = 5)]
+    #[arg(short, long, default_value_t = 5, help = "Maximum number of rotated files retained")]
     max_history: u32,
-    #[arg(long, default_value = None)]
+    #[arg(long, default_value = None, help = "Configuration to log4rs logging configuration. If not provided the default logging configuration is used, using stderr")]
     log_config: Option<String>,
-    #[arg(long, default_value = "50MB", value_parser = file_size)]
+    #[arg(long, default_value = "50MB", value_parser = file_size, help = "Size of the output file which triggers rotation")]
     max_size: u64,
 }
 
